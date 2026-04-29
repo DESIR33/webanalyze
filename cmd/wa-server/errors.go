@@ -26,11 +26,13 @@ const (
 	CodeRateLimited       = "RATE_LIMITED"
 	CodeTargetHostLimited = "TARGET_HOST_LIMITED"
 	CodeTargetHostCircuit = "TARGET_HOST_CIRCUIT_OPEN"
+	CodeBatchEmpty        = "BATCH_EMPTY"
+	CodeBatchTooLarge     = "BATCH_TOO_LARGE"
 )
 
 // ErrorPayload is the typed error envelope (R5).
 type ErrorPayload struct {
-	Code      string `json:"code" doc:"Stable error code" enum:"INVALID_URL,DNS_FAIL,TLS_FAIL,TIMEOUT,BLOCKED_403,BLOCKED_CAPTCHA,EMPTY_PAGE,INTERNAL,UNAUTHORIZED,RATE_LIMITED,TARGET_HOST_LIMITED,TARGET_HOST_CIRCUIT_OPEN"`
+	Code      string `json:"code" doc:"Stable error code" enum:"INVALID_URL,DNS_FAIL,TLS_FAIL,TIMEOUT,BLOCKED_403,BLOCKED_CAPTCHA,EMPTY_PAGE,INTERNAL,UNAUTHORIZED,RATE_LIMITED,TARGET_HOST_LIMITED,TARGET_HOST_CIRCUIT_OPEN,BATCH_EMPTY,BATCH_TOO_LARGE"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
 	RequestID string `json:"request_id"`

@@ -15,6 +15,7 @@ type Config struct {
 	DefaultTimeoutMS   int
 	MaxTimeoutMS       int
 	MaxBodyBytes       int64
+	MaxBulkURLs        int
 	MaxHTMLBytes       int
 	ShutdownDrainSecs  int
 	TechFile           string
@@ -76,6 +77,7 @@ func LoadConfig() (Config, error) {
 		DefaultTimeoutMS:   getenvInt("WA_DEFAULT_TIMEOUT_MS", 10000),
 		MaxTimeoutMS:       getenvInt("WA_MAX_TIMEOUT_MS", 30000),
 		MaxBodyBytes:       getenvInt64("WA_MAX_BODY_BYTES", 5_000_000),
+		MaxBulkURLs:        getenvInt("WA_MAX_BULK_URLS", 100),
 		MaxHTMLBytes:       getenvInt("WA_MAX_HTML_BYTES", 5_000_000),
 		ShutdownDrainSecs:  getenvInt("WA_SHUTDOWN_DRAIN_SECS", 25),
 		TechFile:           getenv("WA_TECH_FILE", "technologies.json"),
@@ -125,6 +127,12 @@ func LoadConfig() (Config, error) {
 	}
 	if cfg.MaxBodyBytes < 1024 {
 		cfg.MaxBodyBytes = 1024
+	}
+	if cfg.MaxBulkURLs < 1 {
+		cfg.MaxBulkURLs = 1
+	}
+	if cfg.MaxBulkURLs > 500 {
+		cfg.MaxBulkURLs = 500
 	}
 	if cfg.TargetPerHostRPM > 0 {
 		if cfg.TargetPerHostBurst < 1 {

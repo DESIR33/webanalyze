@@ -45,6 +45,7 @@ Authenticate with Authorization: Bearer wa_live_<secret> (see environment bootst
 
 	registerHealth(api, st)
 	registerAnalyze(api, cfg, wa, pool)
+	registerBulkAnalyze(api, cfg, wa, pool)
 
 	r := chi.NewRouter()
 	r.Use(requestIDMiddleware)
