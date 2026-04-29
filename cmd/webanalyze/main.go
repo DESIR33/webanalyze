@@ -46,6 +46,10 @@ func init() {
 }
 
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "keys" {
+		os.Exit(runKeysCLI(os.Args[2:]))
+	}
+
 	var (
 		file io.ReadCloser
 		err  error
