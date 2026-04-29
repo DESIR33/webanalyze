@@ -11,7 +11,7 @@ func registerOpenAPIIdempotency(api huma.API) {
 	if o == nil || o.Paths == nil {
 		return
 	}
-	for _, p := range []string{"/v1/analyze", "/v1/analyze/bulk"} {
+	for _, p := range []string{"/v1/analyze", "/v1/analyze/bulk", "/v1/analyze/async"} {
 		patchPostIdempotency(o, p)
 	}
 }

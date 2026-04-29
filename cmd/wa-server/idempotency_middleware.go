@@ -21,6 +21,8 @@ func idempotencyAppliesToPath(path string) bool {
 	switch path {
 	case "/v1/health", "/v1/ready", "/v1/docs":
 		return false
+	case "/v1/analyze/async":
+		return false
 	default:
 		if strings.HasPrefix(path, "/v1/openapi") || strings.HasPrefix(path, "/v1/schemas") {
 			return false
