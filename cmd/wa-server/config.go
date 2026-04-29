@@ -35,6 +35,27 @@ type Config struct {
 	TargetHostCooldown       time.Duration
 	TargetHostAcquireTimeout time.Duration
 	TargetHostLRUSize        int
+
+	// Async jobs (Postgres/SQLite with jobs table)
+	AsyncWorkers              int
+	AsyncLeaseSeconds         int
+	AllowPlaintextCallbacks   bool
+	AllowInternalCallbacks    bool
+	CallbackHostAllowlist     []string
+	WebhookRotationOverlap    time.Duration
+	JobAdminOwners            []string
+	WebhookTimeoutSeconds     int
+}
+
+func parseCSVList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func getenv(key, def string) string {
@@ -145,5 +166,29 @@ func LoadConfig() (Config, error) {
 			cfg.TargetHostLRUSize = 1
 		}
 	}
+	asyncWorkers := getenvInt("WA_ASYNC_WORKERS", 16)
+	if asyncWorkers < 1 {
+		asyncWorkers = 1
+	}
+	leaseSecs := getenvInt("WA_ASYNC_LEASE_SECONDS", 300)
+	if leaseSecs < 60 {
+		leaseSecs = 60
+	}
+	overlapH := getenvInt("WA_WEBHOOK_ROTATION_OVERLAP_HOURS", 24)
+	if overlapH < 1 {
+		overlapH = 24
+	}
+	whTimeout := getenvInt("WA_WEBHOOK_TIMEOUT_SECONDS", 10)
+	if whTimeout < 1 {
+		whTimeout = 10
+	}
+	cfg.AsyncWorkers = asyncWorkers
+	cfg.AsyncLeaseSeconds = leaseSecs
+	cfg.AllowPlaintextCallbacks = strings.EqualFold(getenv("WA_ALLOW_PLAINTEXT_CALLBACKS", "false"), "true")
+	cfg.AllowInternalCallbacks = strings.EqualFold(getenv("WA_ALLOW_INTERNAL_CALLBACKS", "false"), "true")
+	cfg.CallbackHostAllowlist = parseCSVList(getenv("WA_CALLBACK_HOST_ALLOWLIST", ""))
+	cfg.WebhookRotationOverlap = time.Duration(overlapH) * time.Hour
+	cfg.JobAdminOwners = parseCSVList(getenv("WA_JOB_ADMIN_OWNERS", ""))
+	cfg.WebhookTimeoutSeconds = whTimeout
 	return cfg, nil
 }

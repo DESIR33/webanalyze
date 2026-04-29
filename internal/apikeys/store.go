@@ -73,6 +73,9 @@ func OpenStore(ctx context.Context, sqlitePath, pgURL string) (*Store, error) {
 
 func (s *Store) DB() *sql.DB { return s.db }
 
+// Postgres reports whether the store uses PostgreSQL (vs SQLite).
+func (s *Store) Postgres() bool { return s.postgres }
+
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) Migrate(ctx context.Context) error {

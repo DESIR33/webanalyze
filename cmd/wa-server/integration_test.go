@@ -16,6 +16,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/rverton/webanalyze"
 	"github.com/rverton/webanalyze/internal/apikeys"
+	"github.com/rverton/webanalyze/internal/asyncjobs"
 )
 
 func testTechnologiesPath(t *testing.T) string {
@@ -41,6 +42,9 @@ func newTestHandler(t *testing.T, cfg Config, redisAddr string, insertKey bool, 
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := asyncjobs.Migrate(ctx, st.DB(), st.Postgres()); err != nil {
 		t.Fatal(err)
 	}
 	var plaintext string
@@ -95,7 +99,8 @@ func newTestHandler(t *testing.T, cfg Config, redisAddr string, insertKey bool, 
 	pool := newScanPool(cfg.Workers)
 	stReady := &serverState{ready: true}
 	log := newLogger("error")
-	h := buildHTTPHandler(cfg, st.DB(), wa, pool, stReady, v, rl, lf, log)
+	ajs := asyncjobs.NewStore(st.DB(), st.Postgres())
+	h := buildHTTPHandler(cfg, ajs, wa, pool, stReady, v, rl, lf, log)
 	return h, plaintext
 }
 

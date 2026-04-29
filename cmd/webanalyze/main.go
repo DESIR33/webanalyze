@@ -46,8 +46,15 @@ func init() {
 }
 
 func main() {
-	if len(os.Args) >= 2 && os.Args[1] == "keys" {
-		os.Exit(runKeysCLI(os.Args[2:]))
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "keys":
+			os.Exit(runKeysCLI(os.Args[2:]))
+		case "secrets":
+			os.Exit(runSecretsCLI(os.Args[2:]))
+		case "jobs":
+			os.Exit(runJobsCLI(os.Args[2:]))
+		}
 	}
 
 	var (

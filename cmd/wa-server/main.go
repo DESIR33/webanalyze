@@ -15,6 +15,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/rverton/webanalyze"
 	"github.com/rverton/webanalyze/internal/apikeys"
+	"github.com/rverton/webanalyze/internal/asyncjobs"
 	_ "modernc.org/sqlite"
 )
 
@@ -26,22 +27,27 @@ func main() {
 	}
 	log := newLogger(cfg.LogLevel)
 
-	ctx := context.Background()
-	st, err := apikeys.OpenStore(ctx, cfg.DBPath, cfg.DatabaseURL)
+	baseCtx, stopBase := context.WithCancel(context.Background())
+	defer stopBase()
+	st, err := apikeys.OpenStore(baseCtx, cfg.DBPath, cfg.DatabaseURL)
 	if err != nil {
 		log.Error("keys db", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
 	defer st.Close()
-	if err := st.Migrate(ctx); err != nil {
+	if err := st.Migrate(baseCtx); err != nil {
 		log.Error("migrate keys", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	if err := apikeys.BootstrapFromEnv(ctx, st, cfg.BootstrapAPIKey, cfg.BootstrapOwner, cfg.BootstrapKeyName, cfg.BootstrapCreatedBy); err != nil {
+	if err := asyncjobs.Migrate(baseCtx, st.DB(), st.Postgres()); err != nil {
+		log.Error("migrate async jobs", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	if err := apikeys.BootstrapFromEnv(baseCtx, st, cfg.BootstrapAPIKey, cfg.BootstrapOwner, cfg.BootstrapKeyName, cfg.BootstrapCreatedBy); err != nil {
 		log.Error("bootstrap api key", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	nkeys, _ := st.CountKeys(ctx)
+	nkeys, _ := st.CountKeys(baseCtx)
 	if nkeys == 0 {
 		log.Error("no api keys in database — set WA_BOOTSTRAP_API_KEY or create keys via webanalyze keys create")
 		os.Exit(1)
@@ -83,7 +89,10 @@ func main() {
 	pool := newScanPool(cfg.Workers)
 	stReady := &serverState{ready: true}
 
-	handler := buildHTTPHandler(cfg, st.DB(), wa, pool, stReady, v, rl, lf, log)
+	ajs := asyncjobs.NewStore(st.DB(), st.Postgres())
+	asyncRT := startAsyncRuntime(baseCtx, cfg, ajs, wa, pool, log)
+
+	handler := buildHTTPHandler(cfg, ajs, wa, pool, stReady, v, rl, lf, log)
 
 	addr := fmt.Sprintf(":%d", cfg.HTTPPort)
 	writeMS := cfg.MaxTimeoutMS + 5
@@ -117,6 +126,9 @@ func main() {
 	<-sig
 
 	pool.close()
+	if asyncRT != nil {
+		asyncRT.Stop()
+	}
 	stReady.ready = false
 
 	drain := time.Duration(cfg.ShutdownDrainSecs) * time.Second
