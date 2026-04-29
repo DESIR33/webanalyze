@@ -89,10 +89,17 @@ func main() {
 	pool := newScanPool(cfg.Workers)
 	stReady := &serverState{ready: true}
 
-	ajs := asyncjobs.NewStore(st.DB(), st.Postgres())
-	asyncRT := startAsyncRuntime(baseCtx, cfg, ajs, wa, pool, log)
+	sideRT, err := newSideRuntime(cfg, rl)
+	if err != nil {
+		log.Error("dns_whois_runtime", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	go dnsUpstreamReloader(baseCtx, cfg, sideRT, log)
 
-	handler := buildHTTPHandler(cfg, ajs, wa, pool, stReady, v, rl, lf, log)
+	ajs := asyncjobs.NewStore(st.DB(), st.Postgres())
+	asyncRT := startAsyncRuntime(baseCtx, cfg, ajs, wa, pool, sideRT, log)
+
+	handler := buildHTTPHandler(cfg, ajs, wa, pool, stReady, v, rl, lf, log, sideRT)
 
 	addr := fmt.Sprintf(":%d", cfg.HTTPPort)
 	writeMS := cfg.MaxTimeoutMS + 5

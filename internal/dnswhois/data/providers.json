@@ -1,0 +1,28 @@
+{
+  "taxonomy_version": "2026-04-29",
+  "mail": [
+    {"pattern": "*.google.com.", "provider": "google_workspace"},
+    {"pattern": "*.googlemail.com.", "provider": "google_workspace"},
+    {"pattern": "*.outlook.com.", "provider": "microsoft_365"},
+    {"pattern": "*.mail.protection.outlook.com.", "provider": "microsoft_365"},
+    {"pattern": "*.zoho.com.", "provider": "zoho"},
+    {"pattern": "*.zoho.eu.", "provider": "zoho"},
+    {"pattern": "*.proofpoint.com.", "provider": "proofpoint"},
+    {"pattern": "*.pphosted.com.", "provider": "proofpoint"},
+    {"pattern": "*.mimecast.com.", "provider": "mimecast"},
+    {"pattern": "*.protonmail.ch.", "provider": "proton"},
+    {"pattern": "*.protonmail.com.", "provider": "proton"},
+    {"pattern": "*.fastmail.com.", "provider": "fastmail"},
+    {"pattern": "*.messagingengine.com.", "provider": "fastmail"},
+    {"pattern": "*.amazonaws.com.", "provider": "amazon_ses"}
+  ],
+  "dns": [
+    {"pattern": "*.ns.cloudflare.com.", "provider": "cloudflare"},
+    {"pattern": "*.awsdns-*.", "provider": "route53"},
+    {"pattern": "ns-cloud-*.googledomains.com.", "provider": "google_cloud_dns"},
+    {"pattern": "*.azure-dns.com.", "provider": "azure_dns"},
+    {"pattern": "*.domaincontrol.com.", "provider": "godaddy"},
+    {"pattern": "*.registrar-servers.com.", "provider": "namecheap"},
+    {"pattern": "*.dnsimple.com.", "provider": "dnsimple"}
+  ]
+}

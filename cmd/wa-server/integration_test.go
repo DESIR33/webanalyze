@@ -99,8 +99,12 @@ func newTestHandler(t *testing.T, cfg Config, redisAddr string, insertKey bool, 
 	pool := newScanPool(cfg.Workers)
 	stReady := &serverState{ready: true}
 	log := newLogger("error")
+	sideRT, err := newSideRuntime(cfg, rl)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ajs := asyncjobs.NewStore(st.DB(), st.Postgres())
-	h := buildHTTPHandler(cfg, ajs, wa, pool, stReady, v, rl, lf, log)
+	h := buildHTTPHandler(cfg, ajs, wa, pool, stReady, v, rl, lf, log, sideRT)
 	return h, plaintext
 }
 

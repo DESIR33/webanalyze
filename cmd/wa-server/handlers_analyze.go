@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/rverton/webanalyze"
+	"github.com/rverton/webanalyze/internal/dnswhois"
 )
 
 // AnalyzeOptions mirrors request body options.
@@ -20,6 +23,9 @@ type AnalyzeOptions struct {
 	CrawlDepth        int    `json:"crawl_depth,omitempty" minimum:"0" maximum:"10"`
 	IncludeSubdomains *bool  `json:"include_subdomains,omitempty"`
 	UserAgent         string `json:"user_agent,omitempty" doc:"Use \"default\" for server default"`
+	SkipDNS           *bool  `json:"skip_dns,omitempty" doc:"Skip DNS side-channel enrichment"`
+	SkipWHOIS         *bool  `json:"skip_whois,omitempty" doc:"Skip WHOIS/RDAP enrichment"`
+	Fresh             bool   `json:"fresh,omitempty" doc:"Bypass WHOIS cache (same as query fresh on sync analyze)"`
 }
 
 // AnalyzeRequestBody is POST /v1/analyze body.
@@ -47,13 +53,15 @@ type AnalyzeStats struct {
 
 // AnalyzeSuccessResponse is the JSON body for 200 responses from POST /v1/analyze.
 type AnalyzeSuccessResponse struct {
-	RequestID    string           `json:"request_id"`
-	InputURL     string           `json:"input_url"`
-	FinalURL     string           `json:"final_url"`
-	ScannedAt    time.Time        `json:"scanned_at"`
-	DurationMS   int64            `json:"duration_ms"`
-	Technologies []TechnologyItem `json:"technologies"`
-	Stats        AnalyzeStats     `json:"stats"`
+	RequestID    string               `json:"request_id"`
+	InputURL     string               `json:"input_url"`
+	FinalURL     string               `json:"final_url"`
+	ScannedAt    time.Time            `json:"scanned_at"`
+	DurationMS   int64                `json:"duration_ms"`
+	Technologies []TechnologyItem     `json:"technologies"`
+	Stats        AnalyzeStats         `json:"stats"`
+	DNS          *dnswhois.DNSBlock   `json:"dns,omitempty"`
+	WHOIS        *dnswhois.WHOISBlock `json:"whois,omitempty"`
 }
 
 func confidenceFromMatches(matchSlices [][]string) int {
@@ -156,9 +164,96 @@ func mapMatchesToTech(wa *webanalyze.WebAnalyzer, res webanalyze.Result) []Techn
 	return out
 }
 
-func registerAnalyze(api huma.API, cfg Config, wa *webanalyze.WebAnalyzer, pool *scanPool) {
+func runAnalyzeScan(ctx context.Context, reqID string, cfg Config, wa *webanalyze.WebAnalyzer, pool *scanPool, sideRT *dnswhois.SideRuntime, u *url.URL, rawURL string, opts AnalyzeOptions, fresh bool) (*AnalyzeSuccessResponse, error) {
+	timeoutMS := cfg.DefaultTimeoutMS
+	if opts.TimeoutMS > 0 {
+		timeoutMS = opts.TimeoutMS
+	}
+	if timeoutMS > cfg.MaxTimeoutMS {
+		timeoutMS = cfg.MaxTimeoutMS
+	}
+	timeout := time.Duration(timeoutMS) * time.Millisecond
+
+	follow := false
+	if opts.FollowRedirects != nil {
+		follow = *opts.FollowRedirects
+	}
+
+	includeSub := false
+	if opts.IncludeSubdomains != nil {
+		includeSub = *opts.IncludeSubdomains
+	}
+
+	ua := strings.TrimSpace(opts.UserAgent)
+	if ua == "" || ua == "default" {
+		ua = "Mozilla/5.0 (compatible; WebanalyzeAPI/1.0; +https://github.com/rverton/webanalyze)"
+	}
+
+	job := webanalyze.NewOnlineJob(u.String(), "", nil, opts.CrawlDepth, includeSub, follow)
+	job.MaxHTMLBytes = cfg.MaxHTMLBytes
+	job.UserAgent = ua
+
+	client := buildHTTPClient(timeout, follow, u.String(), cfg)
+
+	acquireCtx, cancel := context.WithTimeout(ctx, timeout+2*time.Second)
+	defer cancel()
+
+	if err := pool.acquire(acquireCtx); err != nil {
+		return nil, errTyped(503, CodeInternal, "Server is shutting down or overloaded", true, reqID)
+	}
+	defer pool.release()
+
+	skipDNS := opts.SkipDNS != nil && *opts.SkipDNS
+	skipWHOIS := opts.SkipWHOIS != nil && *opts.SkipWHOIS
+
+	apex, _ := dnswhois.ApexFromHost(u.Hostname())
+	if apex == "" {
+		apex = dnswhois.NormalizeHost(u.Hostname())
+	}
+	hostLabel := dnswhois.NormalizeHost(u.Hostname())
+
+	var res webanalyze.Result
+	var side dnswhois.SideEnvelope
+	if sideRT != nil {
+		side = sideRT.GatherParallel(ctx, apex, hostLabel, skipDNS, skipWHOIS, fresh, func() error {
+			r, _ := wa.ProcessWithClient(job, client)
+			res = r
+			return nil
+		}, nil)
+	} else {
+		r, _ := wa.ProcessWithClient(job, client)
+		res = r
+	}
+
+	if res.Error != nil {
+		return nil, classifyScanError(reqID, res.Error)
+	}
+
+	final := res.FinalURL
+	if final == "" {
+		final = res.Host
+	}
+
+	return &AnalyzeSuccessResponse{
+		InputURL:     rawURL,
+		FinalURL:     final,
+		ScannedAt:    time.Now().UTC().Truncate(time.Millisecond),
+		DurationMS:   res.Duration.Milliseconds(),
+		Technologies: mapMatchesToTech(wa, res),
+		Stats: AnalyzeStats{
+			FetchStatus:           res.FetchStatus,
+			HTMLBytes:             res.HTMLBytes,
+			FingerprintsEvaluated: res.FingerprintsEvaluated,
+		},
+		DNS:   side.DNS,
+		WHOIS: side.WHOIS,
+	}, nil
+}
+
+func registerAnalyze(api huma.API, cfg Config, wa *webanalyze.WebAnalyzer, pool *scanPool, sideRT *dnswhois.SideRuntime, log *slog.Logger) {
 	type Input struct {
 		RequestID string `header:"X-Request-ID" doc:"Optional correlation ID; echoed in response"`
+		Fresh     bool   `query:"fresh" doc:"Bypass WHOIS cache when true"`
 		Body      AnalyzeRequestBody
 	}
 
@@ -189,68 +284,17 @@ func registerAnalyze(api huma.API, cfg Config, wa *webanalyze.WebAnalyzer, pool 
 			return nil, errTyped(400, CodeInvalidURL, "url must be an absolute http or https URL", false, reqID)
 		}
 
-		timeoutMS := cfg.DefaultTimeoutMS
-		if input.Body.Options.TimeoutMS > 0 {
-			timeoutMS = input.Body.Options.TimeoutMS
+		payload, scanErr := runAnalyzeScan(ctx, reqID, cfg, wa, pool, sideRT, u, rawURL, input.Body.Options, input.Fresh || input.Body.Options.Fresh)
+		if scanErr != nil {
+			var te *TypedHTTPError
+			if errors.As(scanErr, &te) && te.Payload.RequestID == "" {
+				te.Payload.RequestID = reqID
+			}
+			return nil, scanErr
 		}
-		if timeoutMS > cfg.MaxTimeoutMS {
-			timeoutMS = cfg.MaxTimeoutMS
-		}
-		timeout := time.Duration(timeoutMS) * time.Millisecond
+		payload.RequestID = reqID
 
-		follow := false
-		if input.Body.Options.FollowRedirects != nil {
-			follow = *input.Body.Options.FollowRedirects
-		}
-
-		includeSub := false
-		if input.Body.Options.IncludeSubdomains != nil {
-			includeSub = *input.Body.Options.IncludeSubdomains
-		}
-
-		ua := strings.TrimSpace(input.Body.Options.UserAgent)
-		if ua == "" || ua == "default" {
-			ua = "Mozilla/5.0 (compatible; WebanalyzeAPI/1.0; +https://github.com/rverton/webanalyze)"
-		}
-
-		job := webanalyze.NewOnlineJob(u.String(), "", nil, input.Body.Options.CrawlDepth, includeSub, follow)
-		job.MaxHTMLBytes = cfg.MaxHTMLBytes
-		job.UserAgent = ua
-
-		client := buildHTTPClient(timeout, follow, u.String(), cfg)
-
-		acquireCtx, cancel := context.WithTimeout(ctx, timeout+2*time.Second)
-		defer cancel()
-
-		if err := pool.acquire(acquireCtx); err != nil {
-			return nil, errTyped(503, CodeInternal, "Server is shutting down or overloaded", true, reqID)
-		}
-		defer pool.release()
-
-		res, _ := wa.ProcessWithClient(job, client)
-
-		if res.Error != nil {
-			return nil, classifyScanError(reqID, res.Error)
-		}
-
-		final := res.FinalURL
-		if final == "" {
-			final = res.Host
-		}
-
-		payload := AnalyzeSuccessResponse{
-			RequestID:    reqID,
-			InputURL:     rawURL,
-			FinalURL:     final,
-			ScannedAt:    time.Now().UTC().Truncate(time.Millisecond),
-			DurationMS:   res.Duration.Milliseconds(),
-			Technologies: mapMatchesToTech(wa, res),
-			Stats: AnalyzeStats{
-				FetchStatus:           res.FetchStatus,
-				HTMLBytes:             res.HTMLBytes,
-				FingerprintsEvaluated: res.FingerprintsEvaluated,
-			},
-		}
+		logAnalyzeSideChannel(log, reqID, payload.DNS, payload.WHOIS)
 
 		return &Output{
 			RequestIDHeader: reqID,

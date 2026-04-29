@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-04-29T00:00:00Z",
+  "taxonomy_version": "2026-04-29",
+  "ranges": [
+    {"provider": "cloudflare", "cidrs": ["104.16.0.0/12", "172.64.0.0/13"]},
+    {"provider": "aws", "cidrs": ["3.0.0.0/9"]},
+    {"provider": "gcp", "cidrs": ["34.64.0.0/10"]},
+    {"provider": "azure", "cidrs": ["20.0.0.0/11"]},
+    {"provider": "vercel", "cidrs": ["76.76.21.0/24"]},
+    {"provider": "netlify", "cidrs": ["75.2.60.0/24"]},
+    {"provider": "fastly", "cidrs": ["151.101.0.0/16"]},
+    {"provider": "godaddy_parking", "cidrs": ["97.74.100.0/24"]}
+  ]
+}

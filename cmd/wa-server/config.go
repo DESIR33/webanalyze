@@ -37,14 +37,24 @@ type Config struct {
 	TargetHostLRUSize        int
 
 	// Async jobs (Postgres/SQLite with jobs table)
-	AsyncWorkers              int
-	AsyncLeaseSeconds         int
-	AllowPlaintextCallbacks   bool
-	AllowInternalCallbacks    bool
-	CallbackHostAllowlist     []string
-	WebhookRotationOverlap    time.Duration
-	JobAdminOwners            []string
-	WebhookTimeoutSeconds     int
+	AsyncWorkers            int
+	AsyncLeaseSeconds       int
+	AllowPlaintextCallbacks bool
+	AllowInternalCallbacks  bool
+	CallbackHostAllowlist   []string
+	WebhookRotationOverlap  time.Duration
+	JobAdminOwners          []string
+	WebhookTimeoutSeconds   int
+
+	// DNS / WHOIS side-channel enrichment (F-009).
+	DNSUpstreams      []string
+	DNSTimeoutMS      int
+	DNSRetries        int
+	DNSCacheMaxTTLs   int
+	WHOISEnabled      bool
+	WHOISTimeoutMS    int
+	WHOISCacheTTLHrs  int
+	HostingRangesPath string
 }
 
 func parseCSVList(s string) []string {
@@ -190,5 +200,14 @@ func LoadConfig() (Config, error) {
 	cfg.WebhookRotationOverlap = time.Duration(overlapH) * time.Hour
 	cfg.JobAdminOwners = parseCSVList(getenv("WA_JOB_ADMIN_OWNERS", ""))
 	cfg.WebhookTimeoutSeconds = whTimeout
+
+	cfg.DNSUpstreams = parseCSVList(getenv("WA_DNS_UPSTREAMS", "1.1.1.1,8.8.8.8"))
+	cfg.DNSTimeoutMS = getenvInt("WA_DNS_TIMEOUT_MS", 2000)
+	cfg.DNSRetries = getenvInt("WA_DNS_RETRIES", 1)
+	cfg.DNSCacheMaxTTLs = getenvInt("WA_DNS_CACHE_MAX_TTL_S", 300)
+	cfg.WHOISEnabled = !strings.EqualFold(getenv("WA_WHOIS_ENABLED", "true"), "false")
+	cfg.WHOISTimeoutMS = getenvInt("WA_WHOIS_TIMEOUT_MS", 5000)
+	cfg.WHOISCacheTTLHrs = getenvInt("WA_WHOIS_CACHE_TTL_HOURS", 720)
+	cfg.HostingRangesPath = strings.TrimSpace(os.Getenv("WA_HOSTING_PROVIDER_RANGES"))
 	return cfg, nil
 }

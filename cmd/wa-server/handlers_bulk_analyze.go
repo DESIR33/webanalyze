@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/rverton/webanalyze"
+	"github.com/rverton/webanalyze/internal/dnswhois"
 )
 
 // BulkAnalyzeRequestBody is POST /v1/analyze/bulk body.
@@ -32,7 +33,7 @@ type BulkAnalyzeSuccessResponse struct {
 	Results   []BulkAnalyzeItem `json:"results"`
 }
 
-func registerBulkAnalyze(api huma.API, cfg Config, wa *webanalyze.WebAnalyzer, pool *scanPool) {
+func registerBulkAnalyze(api huma.API, cfg Config, wa *webanalyze.WebAnalyzer, pool *scanPool, sideRT *dnswhois.SideRuntime) {
 	type Input struct {
 		RequestID string `header:"X-Request-ID" doc:"Optional correlation ID; echoed in response"`
 		Body      BulkAnalyzeRequestBody
@@ -67,32 +68,6 @@ func registerBulkAnalyze(api huma.API, cfg Config, wa *webanalyze.WebAnalyzer, p
 			return nil, errTyped(400, CodeBatchTooLarge, "urls exceeds configured maximum for bulk analyze", false, reqID)
 		}
 
-		timeoutMS := cfg.DefaultTimeoutMS
-		if input.Body.Options.TimeoutMS > 0 {
-			timeoutMS = input.Body.Options.TimeoutMS
-		}
-		if timeoutMS > cfg.MaxTimeoutMS {
-			timeoutMS = cfg.MaxTimeoutMS
-		}
-		timeout := time.Duration(timeoutMS) * time.Millisecond
-
-		follow := false
-		if input.Body.Options.FollowRedirects != nil {
-			follow = *input.Body.Options.FollowRedirects
-		}
-
-		includeSub := false
-		if input.Body.Options.IncludeSubdomains != nil {
-			includeSub = *input.Body.Options.IncludeSubdomains
-		}
-
-		ua := strings.TrimSpace(input.Body.Options.UserAgent)
-		if ua == "" || ua == "default" {
-			ua = "Mozilla/5.0 (compatible; WebanalyzeAPI/1.0; +https://github.com/rverton/webanalyze)"
-		}
-
-		crawlDepth := input.Body.Options.CrawlDepth
-
 		results := make([]BulkAnalyzeItem, len(urls))
 		var wg sync.WaitGroup
 		for i := range urls {
@@ -114,60 +89,35 @@ func registerBulkAnalyze(api huma.API, cfg Config, wa *webanalyze.WebAnalyzer, p
 					return
 				}
 
-				job := webanalyze.NewOnlineJob(u.String(), "", nil, crawlDepth, includeSub, follow)
-				job.MaxHTMLBytes = cfg.MaxHTMLBytes
-				job.UserAgent = ua
-
-				client := buildHTTPClient(timeout, follow, u.String(), cfg)
-
-				acquireCtx, cancel := context.WithTimeout(ctx, timeout+2*time.Second)
-				defer cancel()
-
-				if err := pool.acquire(acquireCtx); err != nil {
-					results[idx] = BulkAnalyzeItem{
-						OK: false,
-						Error: &ErrorPayload{
-							Code:      CodeInternal,
-							Message:   "Server is shutting down or overloaded",
-							Retryable: true,
-							RequestID: reqID,
-						},
+				data, scanErr := runAnalyzeScan(ctx, reqID, cfg, wa, pool, sideRT, u, rawURL, input.Body.Options, input.Body.Options.Fresh)
+				if scanErr != nil {
+					var te *TypedHTTPError
+					if errors.As(scanErr, &te) {
+						results[idx] = BulkAnalyzeItem{
+							OK:    false,
+							Error: &te.Payload,
+						}
+					} else {
+						results[idx] = BulkAnalyzeItem{
+							OK: false,
+							Error: &ErrorPayload{
+								Code:      CodeInternal,
+								Message:   scanErr.Error(),
+								Retryable: true,
+								RequestID: reqID,
+							},
+						}
+					}
+					if results[idx].Error != nil && results[idx].Error.RequestID == "" {
+						results[idx].Error.RequestID = reqID
 					}
 					return
 				}
-				defer pool.release()
-
-				res, _ := wa.ProcessWithClient(job, client)
-
-				if res.Error != nil {
-					typed := classifyScanError(reqID, res.Error)
-					results[idx] = BulkAnalyzeItem{
-						OK:    false,
-						Error: &typed.Payload,
-					}
-					return
-				}
-
-				final := res.FinalURL
-				if final == "" {
-					final = res.Host
-				}
+				data.RequestID = reqID
 
 				results[idx] = BulkAnalyzeItem{
-					OK: true,
-					Data: &AnalyzeSuccessResponse{
-						RequestID:    reqID,
-						InputURL:     rawURL,
-						FinalURL:     final,
-						ScannedAt:    time.Now().UTC().Truncate(time.Millisecond),
-						DurationMS:   res.Duration.Milliseconds(),
-						Technologies: mapMatchesToTech(wa, res),
-						Stats: AnalyzeStats{
-							FetchStatus:           res.FetchStatus,
-							HTMLBytes:             res.HTMLBytes,
-							FingerprintsEvaluated: res.FingerprintsEvaluated,
-						},
-					},
+					OK:   true,
+					Data: data,
 				}
 			}(i)
 		}

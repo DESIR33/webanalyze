@@ -12,15 +12,16 @@ import (
 	"github.com/rverton/webanalyze"
 	"github.com/rverton/webanalyze/internal/apikeys"
 	"github.com/rverton/webanalyze/internal/asyncjobs"
+	"github.com/rverton/webanalyze/internal/dnswhois"
 )
 
-func buildHTTPHandler(cfg Config, js *asyncjobs.Store, wa *webanalyze.WebAnalyzer, pool *scanPool, st *serverState, v *apikeys.Verifier, rl *redisLimiter, lf *lastUsedFlusher, log *slog.Logger) http.Handler {
+func buildHTTPHandler(cfg Config, js *asyncjobs.Store, wa *webanalyze.WebAnalyzer, pool *scanPool, st *serverState, v *apikeys.Verifier, rl *redisLimiter, lf *lastUsedFlusher, log *slog.Logger, sideRT *dnswhois.SideRuntime) http.Handler {
 	humCfg := huma.DefaultConfig("Webanalyze API", webanalyze.VERSION)
 	humCfg.OpenAPIPath = "/v1/openapi"
 	humCfg.DocsPath = "/v1/docs"
 	humCfg.SchemasPath = "/v1/schemas"
 	if humCfg.OpenAPI.Info != nil {
-	humCfg.OpenAPI.Info.Description = `Sync and asynchronous web technology detection API.
+		humCfg.OpenAPI.Info.Description = `Sync and asynchronous web technology detection API.
 
 Authenticate with Authorization: Bearer wa_live_<secret> (see environment bootstrapping docs).
 
@@ -65,8 +66,8 @@ Write endpoints accept optional ` + "`Idempotency-Key`" + ` (1–255 ASCII). Ret
 	api := humachi.New(inner, humCfg)
 
 	registerHealth(api, st)
-	registerAnalyze(api, cfg, wa, pool)
-	registerBulkAnalyze(api, cfg, wa, pool)
+	registerAnalyze(api, cfg, wa, pool, sideRT, log)
+	registerBulkAnalyze(api, cfg, wa, pool, sideRT)
 	registerAsyncRoutes(api, cfg, js, log)
 	registerOpenAPIIdempotency(api)
 
