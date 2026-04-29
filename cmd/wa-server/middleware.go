@@ -87,7 +87,8 @@ func loggingMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(ww, r)
 
 			reqID, _ := r.Context().Value(ctxRequestID).(string)
-			keyID, _ := r.Context().Value(ctxKeyID).(string)
+			kctx := ctxKeyFromContext(r.Context())
+			keyID := kctx.KeyID
 			if keyID == "" {
 				keyID = "-"
 			}

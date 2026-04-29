@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,7 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/rverton/webanalyze"
+	"github.com/rverton/webanalyze/internal/apikeys"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -26,20 +27,41 @@ func main() {
 	log := newLogger(cfg.LogLevel)
 
 	ctx := context.Background()
-	db, err := openKeysDB(ctx, cfg.DBPath)
+	st, err := apikeys.OpenStore(ctx, cfg.DBPath, cfg.DatabaseURL)
 	if err != nil {
 		log.Error("keys db", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	defer db.Close()
-	if err := migrateKeys(ctx, db); err != nil {
+	defer st.Close()
+	if err := st.Migrate(ctx); err != nil {
 		log.Error("migrate keys", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	if err := seedAPIKeys(ctx, db, cfg.APIKeysEnv); err != nil {
-		log.Error("seed api keys", slog.String("err", err.Error()))
+	if err := apikeys.BootstrapFromEnv(ctx, st, cfg.BootstrapAPIKey, cfg.BootstrapOwner, cfg.BootstrapKeyName, cfg.BootstrapCreatedBy); err != nil {
+		log.Error("bootstrap api key", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
+	nkeys, _ := st.CountKeys(ctx)
+	if nkeys == 0 {
+		log.Error("no api keys in database — set WA_BOOTSTRAP_API_KEY or create keys via webanalyze keys create")
+		os.Exit(1)
+	}
+
+	v, err := apikeys.NewVerifier(st)
+	if err != nil {
+		log.Error("auth verifier", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+
+	rl, err := newRedisLimiter(cfg.RedisURL)
+	if err != nil {
+		log.Error("redis", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	defer rl.Close()
+
+	lf := startLastUsedFlusher(st)
+	defer lf.Close()
 
 	techPath, err := resolveTechnologiesPath(cfg.TechFile)
 	if err != nil {
@@ -59,9 +81,9 @@ func main() {
 	}
 
 	pool := newScanPool(cfg.Workers)
-	st := &serverState{ready: true}
+	stReady := &serverState{ready: true}
 
-	handler := buildHTTPHandler(cfg, db, wa, pool, st, log)
+	handler := buildHTTPHandler(cfg, st.DB(), wa, pool, stReady, v, rl, lf, log)
 
 	addr := fmt.Sprintf(":%d", cfg.HTTPPort)
 	srv := &http.Server{
@@ -86,7 +108,7 @@ func main() {
 	<-sig
 
 	pool.close()
-	st.ready = false
+	stReady.ready = false
 
 	drain := time.Duration(cfg.ShutdownDrainSecs) * time.Second
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), drain)
@@ -127,35 +149,6 @@ func resolveTechnologiesPath(configured string) (string, error) {
 	return "", fmt.Errorf("technologies file not found: %s", configured)
 }
 
-func apiKeyMiddleware(db *sql.DB) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p := r.URL.Path
-			if isPublicPath(p) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			rid, _ := r.Context().Value(ctxRequestID).(string)
-			kid, err := verifyBearer(r.Context(), db, r.Header.Get("Authorization"))
-			if err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"error": map[string]any{
-						"code":       CodeUnauthorized,
-						"message":    "Invalid or missing API key",
-						"retryable":  false,
-						"request_id": rid,
-					},
-				})
-				return
-			}
-			ctx := context.WithValue(r.Context(), ctxKeyID, kid)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
-}
-
 func isPublicPath(p string) bool {
 	switch {
 	case p == "/v1/health":
@@ -165,6 +158,8 @@ func isPublicPath(p string) bool {
 	case p == "/v1/docs":
 		return true
 	case strings.HasPrefix(p, "/v1/schemas"):
+		return true
+	case p == "/metrics":
 		return true
 	default:
 		return false

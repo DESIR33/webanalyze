@@ -12,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/rverton/webanalyze"
+	"github.com/rverton/webanalyze/internal/apikeys"
 )
 
 func testTechnologiesPath(t *testing.T) string {
@@ -28,20 +30,53 @@ func testTechnologiesPath(t *testing.T) string {
 	return p
 }
 
-func newTestHandler(t *testing.T, cfg Config, keysEnv string) http.Handler {
+// newTestHandler builds a handler with optional miniredis URL (empty = no Redis, RPS/daily fail-open).
+func newTestHandler(t *testing.T, cfg Config, redisAddr string, insertKey bool, rpsLimit, dailyQuota int) (http.Handler, string) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := openKeysDB(ctx, "")
+	st, err := apikeys.OpenStore(ctx, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrateKeys(ctx, db); err != nil {
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := seedAPIKeys(ctx, db, keysEnv); err != nil {
+	var plaintext string
+	if insertKey {
+		plaintext, err = apikeys.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := apikeys.HashSecret(plaintext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pref := apikeys.Prefix12(plaintext)
+		_, err = st.InsertKey(ctx, pref, h, "integration", "owner", "integration", rpsLimit, dailyQuota)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	v, err := apikeys.NewVerifier(st)
+	if err != nil {
 		t.Fatal(err)
 	}
+	var rl *redisLimiter
+	if redisAddr != "" {
+		r, err := newRedisLimiter(redisAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rl = r
+		t.Cleanup(func() { _ = rl.Close() })
+	} else {
+		rl, _ = newRedisLimiter("")
+	}
+
+	lf := startLastUsedFlusher(st)
+	t.Cleanup(func() { lf.Close() })
 
 	f, err := os.Open(testTechnologiesPath(t))
 	if err != nil {
@@ -54,9 +89,10 @@ func newTestHandler(t *testing.T, cfg Config, keysEnv string) http.Handler {
 	}
 
 	pool := newScanPool(cfg.Workers)
-	st := &serverState{ready: true}
+	stReady := &serverState{ready: true}
 	log := newLogger("error")
-	return buildHTTPHandler(cfg, db, wa, pool, st, log)
+	h := buildHTTPHandler(cfg, st.DB(), wa, pool, stReady, v, rl, lf, log)
+	return h, plaintext
 }
 
 func TestHealthAndOpenAPI_NoAuth(t *testing.T) {
@@ -69,7 +105,7 @@ func TestHealthAndOpenAPI_NoAuth(t *testing.T) {
 		ShutdownDrainSecs: 25,
 		TechFile:          "technologies.json",
 	}
-	h := newTestHandler(t, cfg, "t:testsecret")
+	h, _ := newTestHandler(t, cfg, "", true, 20, 200_000)
 
 	t.Run("health", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -94,6 +130,14 @@ func TestHealthAndOpenAPI_NoAuth(t *testing.T) {
 			t.Fatalf("expected openapi 3.1.x, got %v", doc["openapi"])
 		}
 	})
+
+	t.Run("metrics no auth", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d", rec.Code)
+		}
+	})
 }
 
 func TestAnalyze_Unauthorized(t *testing.T) {
@@ -106,7 +150,7 @@ func TestAnalyze_Unauthorized(t *testing.T) {
 		ShutdownDrainSecs: 25,
 		TechFile:          "technologies.json",
 	}
-	h := newTestHandler(t, cfg, "kid:secret")
+	h, _ := newTestHandler(t, cfg, "", false, 20, 200_000)
 
 	body := `{"url":"https://example.com"}`
 	rec := httptest.NewRecorder()
@@ -134,13 +178,13 @@ func TestAnalyze_InvalidURL(t *testing.T) {
 		ShutdownDrainSecs: 25,
 		TechFile:          "technologies.json",
 	}
-	h := newTestHandler(t, cfg, "kid:secret")
+	h, key := newTestHandler(t, cfg, "", true, 20, 200_000)
 
 	body := `{"url":"not-a-url"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/analyze", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer kid:secret")
+	req.Header.Set("Authorization", "Bearer "+key)
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d %s", rec.Code, rec.Body.String())
@@ -163,8 +207,8 @@ func TestAnalyze_ErrorCodes_Remote(t *testing.T) {
 		ShutdownDrainSecs: 25,
 		TechFile:          "technologies.json",
 	}
-	h := newTestHandler(t, cfg, "kid:secret")
-	auth := "Bearer kid:secret"
+	h, key := newTestHandler(t, cfg, "", true, 20, 200_000)
+	auth := "Bearer " + key
 
 	t.Run("blocked 403", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +296,8 @@ func TestAnalyze_ErrorCodes_Remote(t *testing.T) {
 	})
 }
 
-func TestRateLimited(t *testing.T) {
+func TestRateLimited_RPS(t *testing.T) {
+	s := miniredis.RunT(t)
 	cfg := Config{
 		Workers:           4,
 		DefaultTimeoutMS:  5000,
@@ -261,9 +306,8 @@ func TestRateLimited(t *testing.T) {
 		MaxHTMLBytes:      5_000_000,
 		ShutdownDrainSecs: 25,
 		TechFile:          "technologies.json",
-		RateLimitPerMin:   1,
 	}
-	h := newTestHandler(t, cfg, "kid:secret")
+	h, key := newTestHandler(t, cfg, "redis://"+s.Addr(), true, 1, 1_000_000)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `<html><body>x</body></html>`)
@@ -275,18 +319,24 @@ func TestRateLimited(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/v1/analyze", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer kid:secret")
+		req.Header.Set("Authorization", "Bearer "+key)
 		h.ServeHTTP(rec, req)
 		return rec
 	}
 	if do().Code != http.StatusOK {
 		t.Fatal("first request should succeed")
 	}
-	rec2 := do()
-	if rec2.Code != http.StatusTooManyRequests {
-		t.Fatalf("want 429 got %d %s", rec2.Code, rec2.Body.String())
+	if do().Code != http.StatusOK {
+		t.Fatal("second request within burst should succeed")
 	}
-	assertCode(t, rec2.Body.Bytes(), CodeRateLimited)
+	rec3 := do()
+	if rec3.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429 got %d %s", rec3.Code, rec3.Body.String())
+	}
+	assertCode(t, rec3.Body.Bytes(), CodeRateLimited)
+	if rec3.Header().Get("Retry-After") == "" {
+		t.Fatal("missing Retry-After")
+	}
 }
 
 func assertCode(t *testing.T, raw []byte, want string) {

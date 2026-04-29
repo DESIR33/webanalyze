@@ -1,12 +1,24 @@
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
   wa-server:
     build:
       context: .
       dockerfile: Dockerfile.api
     ports:
       - "8080:8080"
+    depends_on:
+      - redis
     environment:
-      WA_API_KEYS: "dev:dev-secret-change-me"
+      WA_DB_PATH: "/data/keys.db"
+      WA_BOOTSTRAP_API_KEY: "wa_live_HPQW7ocfc3SnmCoYP2i99IS9dBWk"
+      WA_REDIS_URL: "redis://redis:6379"
       WA_HTTP_PORT: "8080"
       WA_WORKERS: "8"
       WA_TECH_FILE: "/app/technologies.json"
+    volumes:
+      - wa-data:/data
+volumes:
+  wa-data:
