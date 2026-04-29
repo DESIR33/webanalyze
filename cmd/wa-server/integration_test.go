@@ -394,3 +394,105 @@ func assertCode(t *testing.T, raw []byte, want string) {
 		t.Fatalf("want code %s got %v body %s", want, errObj["code"], string(raw))
 	}
 }
+
+func TestBulkAnalyze_EmptyAndTooLarge(t *testing.T) {
+	cfg := Config{
+		Workers:           4,
+		DefaultTimeoutMS:  10000,
+		MaxTimeoutMS:      30000,
+		MaxBodyBytes:      1 << 20,
+		MaxBulkURLs:       2,
+		MaxHTMLBytes:      5_000_000,
+		ShutdownDrainSecs: 25,
+		TechFile:          "technologies.json",
+	}
+	h, key := newTestHandler(t, cfg, "", true, 20, 200_000)
+	auth := "Bearer " + key
+
+	t.Run("empty urls", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/analyze/bulk", strings.NewReader(`{"urls":[]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", auth)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("want 400 got %d %s", rec.Code, rec.Body.String())
+		}
+		assertCode(t, rec.Body.Bytes(), CodeBatchEmpty)
+	})
+
+	t.Run("too many urls", func(t *testing.T) {
+		body := `{"urls":["http://a.example","http://b.example","http://c.example"]}`
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/analyze/bulk", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", auth)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("want 400 got %d %s", rec.Code, rec.Body.String())
+		}
+		assertCode(t, rec.Body.Bytes(), CodeBatchTooLarge)
+	})
+}
+
+func TestBulkAnalyze_OrderAndMixedResults(t *testing.T) {
+	cfg := Config{
+		Workers:           4,
+		DefaultTimeoutMS:  5000,
+		MaxTimeoutMS:      10000,
+		MaxBodyBytes:      1 << 20,
+		MaxBulkURLs:       50,
+		MaxHTMLBytes:      5_000_000,
+		ShutdownDrainSecs: 25,
+		TechFile:          "technologies.json",
+	}
+	h, key := newTestHandler(t, cfg, "", true, 20, 200_000)
+	auth := "Bearer " + key
+
+	tsOK := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, `<html><body>ok</body></html>`)
+	}))
+	defer tsOK.Close()
+
+	ts403 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no", http.StatusForbidden)
+	}))
+	defer ts403.Close()
+
+	body := `{"urls":["not-a-url","` + tsOK.URL + `","` + ts403.URL + `"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/analyze/bulk", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", auth)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 got %d %s", rec.Code, rec.Body.String())
+	}
+
+	var doc struct {
+		RequestID string `json:"request_id"`
+		Results   []struct {
+			OK    bool `json:"ok"`
+			Data  any  `json:"data"`
+			Error *struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Results) != 3 {
+		t.Fatalf("want 3 results got %d", len(doc.Results))
+	}
+	if doc.Results[0].OK || doc.Results[0].Error == nil || doc.Results[0].Error.Code != CodeInvalidURL {
+		t.Fatalf("first item: %#v", doc.Results[0])
+	}
+	if !doc.Results[1].OK || doc.Results[1].Data == nil {
+		t.Fatalf("second item: %#v", doc.Results[1])
+	}
+	if doc.Results[2].OK || doc.Results[2].Error == nil || doc.Results[2].Error.Code != CodeBlocked403 {
+		t.Fatalf("third item: %#v", doc.Results[2])
+	}
+}

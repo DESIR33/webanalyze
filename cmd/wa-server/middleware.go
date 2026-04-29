@@ -17,7 +17,7 @@ import (
 func peekAnalyzeHostMiddleware(maxPeek int) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/v1/analyze" {
+			if r.Method != http.MethodPost || (r.URL.Path != "/v1/analyze" && r.URL.Path != "/v1/analyze/bulk") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -39,12 +39,17 @@ func peekAnalyzeHostMiddleware(maxPeek int) func(http.Handler) http.Handler {
 			r.Body = io.NopCloser(bytes.NewReader(full))
 
 			var partial struct {
-				URL string `json:"url"`
+				URL  string   `json:"url"`
+				URLs []string `json:"urls"`
 			}
 			_ = json.Unmarshal(peek, &partial)
 			host := "-"
 			if partial.URL != "" {
 				if h := hostOnlyFromURLString(partial.URL); h != "" {
+					host = h
+				}
+			} else if len(partial.URLs) > 0 {
+				if h := hostOnlyFromURLString(partial.URLs[0]); h != "" {
 					host = h
 				}
 			}

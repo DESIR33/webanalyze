@@ -86,12 +86,21 @@ func main() {
 	handler := buildHTTPHandler(cfg, st.DB(), wa, pool, stReady, v, rl, lf, log)
 
 	addr := fmt.Sprintf(":%d", cfg.HTTPPort)
+	writeMS := cfg.MaxTimeoutMS + 5
+	// Bulk batches may run up to ceil(N/workers) * per-URL work; cap wall-clock for HTTP write deadline.
+	bulkWriteMS := cfg.MaxBulkURLs * (cfg.MaxTimeoutMS + 5000)
+	if bulkWriteMS > 3_600_000 {
+		bulkWriteMS = 3_600_000
+	}
+	if bulkWriteMS > writeMS {
+		writeMS = bulkWriteMS
+	}
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       time.Duration(cfg.MaxTimeoutMS+5) * time.Millisecond,
-		WriteTimeout:      time.Duration(cfg.MaxTimeoutMS+5) * time.Millisecond,
+		WriteTimeout:      time.Duration(writeMS) * time.Millisecond,
 		IdleTimeout:       120 * time.Second,
 	}
 
