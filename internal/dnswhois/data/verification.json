@@ -1,0 +1,14 @@
+{
+  "taxonomy_version": "2026-04-29",
+  "prefixes": [
+    {"prefix": "google-site-verification=", "signal": "google_search_console"},
+    {"prefix": "MS=", "signal": "microsoft_365_domain_verification"},
+    {"prefix": "ms=", "signal": "microsoft_365_domain_verification"},
+    {"prefix": "facebook-domain-verification=", "signal": "facebook_business"},
+    {"prefix": "apple-domain-verification=", "signal": "apple_business"},
+    {"prefix": "atlassian-domain-verification=", "signal": "atlassian_cloud"},
+    {"prefix": "intercom-domain-verification=", "signal": "intercom"},
+    {"prefix": "stripe-verification=", "signal": "stripe"},
+    {"prefix": "klaviyo-site-verification=", "signal": "klaviyo"}
+  ]
+}

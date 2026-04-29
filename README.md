@@ -83,6 +83,16 @@ Configure via environment variables:
 | `WA_RATE_LIMIT_PER_MINUTE` | `0` | Optional per-key requests/minute (0 disables) |
 | `WA_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `WA_REDIS_URL` | *(empty)* | Redis for rate limits and idempotency; empty fails open for both |
+| `WA_DNS_UPSTREAMS` | `1.1.1.1,8.8.8.8` | Comma-separated DNS resolvers for side-channel DNS (not `/etc/resolv.conf`); changes picked up within ~30s |
+| `WA_DNS_TIMEOUT_MS` | `2000` | Per-query timeout for controlled resolver |
+| `WA_DNS_RETRIES` | `1` | Retries after timeout |
+| `WA_DNS_CACHE_MAX_TTL_S` | `300` | Max in-process DNS cache TTL cap |
+| `WA_WHOIS_ENABLED` | `true` | Enable RDAP/WHOIS enrichment |
+| `WA_WHOIS_TIMEOUT_MS` | `5000` | RDAP HTTPS timeout |
+| `WA_WHOIS_CACHE_TTL_HOURS` | `720` | WHOIS result TTL in Redis when `WA_REDIS_URL` is set |
+| `WA_HOSTING_PROVIDER_RANGES` | *(empty)* | Optional path to `ip_ranges.json` override (defaults to bundled snapshot) |
+
+Analyze body/query: `options.skip_dns`, `options.skip_whois`, `options.fresh`, or `GET ?fresh=true` on sync analyze bypass WHOIS cache only (DNS in-process cache bypass can be added later).
 
 Example (`curl`):
 

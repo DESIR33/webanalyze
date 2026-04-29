@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -19,6 +20,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/rverton/webanalyze"
 	"github.com/rverton/webanalyze/internal/asyncjobs"
+	"github.com/rverton/webanalyze/internal/dnswhois"
 )
 
 type asyncRuntime struct {
@@ -26,18 +28,19 @@ type asyncRuntime struct {
 	js     *asyncjobs.Store
 	wa     *webanalyze.WebAnalyzer
 	pool   *scanPool
+	sideRT *dnswhois.SideRuntime
 	log    *slog.Logger
 	cancel context.CancelFunc
 
 	workerWG sync.WaitGroup
 }
 
-func startAsyncRuntime(parent context.Context, cfg Config, js *asyncjobs.Store, wa *webanalyze.WebAnalyzer, pool *scanPool, log *slog.Logger) *asyncRuntime {
+func startAsyncRuntime(parent context.Context, cfg Config, js *asyncjobs.Store, wa *webanalyze.WebAnalyzer, pool *scanPool, sideRT *dnswhois.SideRuntime, log *slog.Logger) *asyncRuntime {
 	if js == nil {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(parent)
-	ar := &asyncRuntime{cfg: cfg, js: js, wa: wa, pool: pool, log: log, cancel: cancel}
+	ar := &asyncRuntime{cfg: cfg, js: js, wa: wa, pool: pool, sideRT: sideRT, log: log, cancel: cancel}
 
 	for i := 0; i < cfg.AsyncWorkers; i++ {
 		ar.workerWG.Add(1)
@@ -101,47 +104,14 @@ func (ar *asyncRuntime) runOneScan(ctx context.Context, job *asyncjobs.JobRow) {
 	var opts AnalyzeOptions
 	_ = json.Unmarshal(job.OptionsJSON, &opts)
 
-	timeoutMS := ar.cfg.DefaultTimeoutMS
-	if opts.TimeoutMS > 0 {
-		timeoutMS = opts.TimeoutMS
-	}
-	if timeoutMS > ar.cfg.MaxTimeoutMS {
-		timeoutMS = ar.cfg.MaxTimeoutMS
-	}
-	timeout := time.Duration(timeoutMS) * time.Millisecond
-
-	follow := false
-	if opts.FollowRedirects != nil {
-		follow = *opts.FollowRedirects
-	}
-	includeSub := false
-	if opts.IncludeSubdomains != nil {
-		includeSub = *opts.IncludeSubdomains
-	}
-	ua := strings.TrimSpace(opts.UserAgent)
-	if ua == "" || ua == "default" {
-		ua = "Mozilla/5.0 (compatible; WebanalyzeAPI/1.0; +https://github.com/rverton/webanalyze)"
-	}
-
-	wjob := webanalyze.NewOnlineJob(u.String(), "", nil, opts.CrawlDepth, includeSub, follow)
-	wjob.MaxHTMLBytes = ar.cfg.MaxHTMLBytes
-	wjob.UserAgent = ua
-	client := buildHTTPClient(timeout, follow, u.String(), ar.cfg)
-
-	acquireCtx, cancel := context.WithTimeout(ctx, timeout+2*time.Second)
-	defer cancel()
-	if err := ar.pool.acquire(acquireCtx); err != nil {
-		_ = ar.js.RequeueRetryable(ctx, job.ID, time.Second+time.Duration(rand.Intn(500))*time.Millisecond,
-			mustErrJSON(CodeInternal, "worker pool unavailable", true), time.Now().UTC())
-		return
-	}
-	defer ar.pool.release()
-
-	res, _ := ar.wa.ProcessWithClient(wjob, client)
+	payload, scanErr := runAnalyzeScan(ctx, job.ID, ar.cfg, ar.wa, ar.pool, ar.sideRT, u, rawURL, opts, opts.Fresh)
 	waAsyncRunSeconds.Observe(time.Since(t0).Seconds())
-
-	if res.Error != nil {
-		te := classifyScanError(job.ID, res.Error)
+	if scanErr != nil {
+		var te *TypedHTTPError
+		if !errors.As(scanErr, &te) {
+			_ = ar.js.RequeueRetryable(ctx, job.ID, time.Second, mustErrJSON(CodeInternal, scanErr.Error(), true), time.Now().UTC())
+			return
+		}
 		errB := mustErrPayload(te.Payload.Code, te.Payload.Message, te.Payload.Retryable)
 		if te.Payload.Retryable && job.Attempts < 3 {
 			delay := scanRetryBackoff(job.Attempts)
@@ -163,23 +133,8 @@ func (ar *asyncRuntime) runOneScan(ctx context.Context, job *asyncjobs.JobRow) {
 		return
 	}
 
-	final := res.FinalURL
-	if final == "" {
-		final = res.Host
-	}
-	payload := AnalyzeSuccessResponse{
-		RequestID:    job.ID,
-		InputURL:     rawURL,
-		FinalURL:     final,
-		ScannedAt:    time.Now().UTC().Truncate(time.Millisecond),
-		DurationMS:   res.Duration.Milliseconds(),
-		Technologies: mapMatchesToTech(ar.wa, res),
-		Stats: AnalyzeStats{
-			FetchStatus:           res.FetchStatus,
-			HTMLBytes:             res.HTMLBytes,
-			FingerprintsEvaluated: res.FingerprintsEvaluated,
-		},
-	}
+	payload.RequestID = job.ID
+
 	resBytes, _ := json.Marshal(payload)
 	now := time.Now().UTC()
 	if err := ar.js.MarkJobSucceeded(ctx, job.ID, resBytes, now); err != nil {
