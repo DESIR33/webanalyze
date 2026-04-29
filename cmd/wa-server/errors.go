@@ -14,21 +14,23 @@ import (
 
 // Error codes published in OpenAPI (stable strings).
 const (
-	CodeInvalidURL      = "INVALID_URL"
-	CodeDNSFail         = "DNS_FAIL"
-	CodeTLSFail         = "TLS_FAIL"
-	CodeTimeout         = "TIMEOUT"
-	CodeBlocked403      = "BLOCKED_403"
-	CodeBlockedCaptcha  = "BLOCKED_CAPTCHA"
-	CodeEmptyPage       = "EMPTY_PAGE"
-	CodeInternal        = "INTERNAL"
-	CodeUnauthorized    = "UNAUTHORIZED"
-	CodeRateLimited     = "RATE_LIMITED"
+	CodeInvalidURL        = "INVALID_URL"
+	CodeDNSFail           = "DNS_FAIL"
+	CodeTLSFail           = "TLS_FAIL"
+	CodeTimeout           = "TIMEOUT"
+	CodeBlocked403        = "BLOCKED_403"
+	CodeBlockedCaptcha    = "BLOCKED_CAPTCHA"
+	CodeEmptyPage         = "EMPTY_PAGE"
+	CodeInternal          = "INTERNAL"
+	CodeUnauthorized      = "UNAUTHORIZED"
+	CodeRateLimited       = "RATE_LIMITED"
+	CodeTargetHostLimited = "TARGET_HOST_LIMITED"
+	CodeTargetHostCircuit = "TARGET_HOST_CIRCUIT_OPEN"
 )
 
 // ErrorPayload is the typed error envelope (R5).
 type ErrorPayload struct {
-	Code      string `json:"code" doc:"Stable error code" enum:"INVALID_URL,DNS_FAIL,TLS_FAIL,TIMEOUT,BLOCKED_403,BLOCKED_CAPTCHA,EMPTY_PAGE,INTERNAL,UNAUTHORIZED,RATE_LIMITED"`
+	Code      string `json:"code" doc:"Stable error code" enum:"INVALID_URL,DNS_FAIL,TLS_FAIL,TIMEOUT,BLOCKED_403,BLOCKED_CAPTCHA,EMPTY_PAGE,INTERNAL,UNAUTHORIZED,RATE_LIMITED,TARGET_HOST_LIMITED,TARGET_HOST_CIRCUIT_OPEN"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
 	RequestID string `json:"request_id"`
@@ -67,6 +69,12 @@ func errTyped(status int, code, msg string, retry bool, reqID string) *TypedHTTP
 func classifyScanError(reqID string, err error) *TypedHTTPError {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, errTargetHostCircuitOpen) {
+		return errTyped(503, CodeTargetHostCircuit, "Target host is temporarily unavailable due to repeated failures; try again later", true, reqID)
+	}
+	if errors.Is(err, errTargetHostRateLimited) {
+		return errTyped(429, CodeTargetHostLimited, "Too many concurrent or queued requests to this target host for the configured per-host rate", true, reqID)
 	}
 	if errors.Is(err, webanalyze.ErrBlocked403) {
 		return errTyped(502, CodeBlocked403, "Server returned 403 Forbidden", true, reqID)
