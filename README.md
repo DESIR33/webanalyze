@@ -54,6 +54,48 @@ docker run -it webanalyze:latest -h
 
 See `cmd/webanalyze/main.go` for an example on how to use this as a library.
 
+## REST API (`wa-server`)
+
+The `wa-server` binary exposes versioned HTTP endpoints under `/v1`, OpenAPI 3.1 at `/v1/openapi.json`, Swagger UI at `/v1/docs`, sync analyze at `POST /v1/analyze`, `GET /v1/health`, and `GET /v1/ready`. Authenticate with `Authorization: Bearer <key_id>:<plaintext_secret>` on protected routes (everything except `/v1/health` and OpenAPI/docs/schema routes).
+
+Build locally:
+
+```bash
+go build -o wa-server ./cmd/wa-server
+```
+
+Configure via environment variables:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `WA_HTTP_PORT` | `8080` | Listen port |
+| `WA_WORKERS` | `16` | Max concurrent scans |
+| `WA_DEFAULT_TIMEOUT_MS` | `10000` | Default per-request fetch timeout |
+| `WA_MAX_TIMEOUT_MS` | `30000` | Upper bound for client-selected timeout |
+| `WA_MAX_BODY_BYTES` | `5000000` | Max JSON body size (bytes) |
+| `WA_MAX_HTML_BYTES` | `5000000` | Max bytes read from target response |
+| `WA_SHUTDOWN_DRAIN_SECS` | `25` | Graceful shutdown deadline |
+| `WA_TECH_FILE` | `technologies.json` | Path to fingerprint definitions |
+| `WA_DB_PATH` | *(empty)* | SQLite path for API keys; empty uses in-memory |
+| `WA_API_KEYS` | *(required)* | Comma-separated `id:secret` pairs seeded at startup (stored hashed with Argon2id) |
+| `WA_RATE_LIMIT_PER_MINUTE` | `0` | Optional per-key requests/minute (0 disables) |
+| `WA_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+
+Example (`curl`):
+
+```bash
+curl -sS -X POST http://localhost:8080/v1/analyze \
+  -H 'Authorization: Bearer dev:dev-secret-change-me' \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com","options":{"timeout_ms":8000}}'
+```
+
+Docker Compose brings up the API with a dev key on port 8080:
+
+```bash
+docker compose up --build
+```
+
 ## Example
 
     $ ./webanalyze -host robinverton.de -crawl 1

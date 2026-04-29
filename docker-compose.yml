@@ -1,0 +1,12 @@
+services:
+  wa-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8080:8080"
+    environment:
+      WA_API_KEYS: "dev:dev-secret-change-me"
+      WA_HTTP_PORT: "8080"
+      WA_WORKERS: "8"
+      WA_TECH_FILE: "/app/technologies.json"
