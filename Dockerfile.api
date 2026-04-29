@@ -1,0 +1,18 @@
+# Multi-stage build for the Webanalyze REST API (wa-server).
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/wa-server ./cmd/wa-server
+
+# Distroless base includes CA certificates for outbound HTTPS fetches.
+FROM gcr.io/distroless/base-debian12:nonroot
+WORKDIR /app
+COPY --from=build /out/wa-server /app/wa-server
+COPY technologies.json /app/technologies.json
+ENV WA_HTTP_PORT=8080 \
+    WA_TECH_FILE=/app/technologies.json
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/app/wa-server"]

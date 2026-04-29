@@ -21,6 +21,10 @@ type Job struct {
 	SearchSubdomain  bool
 	forceNotDownload bool
 	followRedirect   bool
+	// MaxHTMLBytes caps how much of the response body is read (0 means caller should set a default).
+	MaxHTMLBytes int
+	// UserAgent is sent as User-Agent on outbound GET requests when non-empty.
+	UserAgent string
 }
 
 // NewOfflineJob constructs a job out of the constituents of a
