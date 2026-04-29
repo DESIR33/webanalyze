@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/rverton/webanalyze"
@@ -294,6 +295,49 @@ func TestAnalyze_ErrorCodes_Remote(t *testing.T) {
 			t.Fatalf("expected technologies: %v", doc["technologies"])
 		}
 	})
+}
+
+func TestAnalyze_TargetHostCircuit(t *testing.T) {
+	cfg := Config{
+		Workers:                  4,
+		DefaultTimeoutMS:         5000,
+		MaxTimeoutMS:             10000,
+		MaxBodyBytes:             1 << 20,
+		MaxHTMLBytes:             5_000_000,
+		ShutdownDrainSecs:        25,
+		TechFile:                 "technologies.json",
+		TargetPerHostRPM:         600,
+		TargetPerHostBurst:       30,
+		TargetHostFailThreshold:  2,
+		TargetHostCooldown:       time.Hour,
+		TargetHostAcquireTimeout: 5 * time.Second,
+		TargetHostLRUSize:        100,
+	}
+	h, key := newTestHandler(t, cfg, "", true, 20, 200_000)
+	auth := "Bearer " + key
+
+	// Connection refused counts as an outbound failure for the circuit breaker.
+	body := []byte(`{"url":"http://127.0.0.1:1/"}`)
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/analyze", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", auth)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("request %d: want 502 got %d %s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/analyze", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", auth)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 circuit got %d %s", rec.Code, rec.Body.String())
+	}
+	assertCode(t, rec.Body.Bytes(), CodeTargetHostCircuit)
 }
 
 func TestRateLimited_RPS(t *testing.T) {

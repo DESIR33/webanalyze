@@ -24,7 +24,7 @@ type AnalyzeOptions struct {
 
 // AnalyzeRequestBody is POST /v1/analyze body.
 type AnalyzeRequestBody struct {
-	URL     string          `json:"url" format:"uri" doc:"Full URL including scheme (https recommended)"`
+	URL     string         `json:"url" format:"uri" doc:"Full URL including scheme (https recommended)"`
 	Options AnalyzeOptions `json:"options,omitempty"`
 }
 
@@ -99,11 +99,23 @@ func defaultHTTPTransport() *http.Transport {
 	}
 }
 
-func buildHTTPClient(timeout time.Duration, followRedirects bool, initialURL string) *http.Client {
+func buildHTTPClient(timeout time.Duration, followRedirects bool, initialURL string, cfg Config) *http.Client {
 	tr := defaultHTTPTransport().Clone()
+	var rt http.RoundTripper = tr
+	if cfg.TargetPerHostRPM > 0 {
+		rt = newHostPolitenessTransport(
+			tr,
+			cfg.TargetHostLRUSize,
+			float64(cfg.TargetPerHostRPM),
+			float64(cfg.TargetPerHostBurst),
+			cfg.TargetHostFailThreshold,
+			cfg.TargetHostCooldown,
+			cfg.TargetHostAcquireTimeout,
+		)
+	}
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: tr,
+		Transport: rt,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if !followRedirects {
 				return http.ErrUseLastResponse
@@ -205,7 +217,7 @@ func registerAnalyze(api huma.API, cfg Config, wa *webanalyze.WebAnalyzer, pool 
 		job.MaxHTMLBytes = cfg.MaxHTMLBytes
 		job.UserAgent = ua
 
-		client := buildHTTPClient(timeout, follow, u.String())
+		client := buildHTTPClient(timeout, follow, u.String(), cfg)
 
 		acquireCtx, cancel := context.WithTimeout(ctx, timeout+2*time.Second)
 		defer cancel()

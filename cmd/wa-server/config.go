@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds process-level settings from the environment.
@@ -25,6 +26,14 @@ type Config struct {
 	BootstrapKeyName   string // WA_BOOTSTRAP_KEY_NAME
 	BootstrapCreatedBy string // WA_BOOTSTRAP_CREATED_BY
 	LogLevel           string
+
+	// Per-target-host outbound politeness (0 RPM = disabled).
+	TargetPerHostRPM         int
+	TargetPerHostBurst       int
+	TargetHostFailThreshold  int
+	TargetHostCooldown       time.Duration
+	TargetHostAcquireTimeout time.Duration
+	TargetHostLRUSize        int
 }
 
 func getenv(key, def string) string {
@@ -78,7 +87,27 @@ func LoadConfig() (Config, error) {
 		BootstrapKeyName:   getenv("WA_BOOTSTRAP_KEY_NAME", "bootstrap"),
 		BootstrapCreatedBy: getenv("WA_BOOTSTRAP_CREATED_BY", "env"),
 		LogLevel:           getenv("WA_LOG_LEVEL", "info"),
+
+		TargetPerHostRPM:        getenvInt("WA_TARGET_PER_HOST_RPM", 60),
+		TargetPerHostBurst:      getenvInt("WA_TARGET_PER_HOST_BURST", 10),
+		TargetHostFailThreshold: getenvInt("WA_TARGET_HOST_FAIL_THRESHOLD", 5),
+		TargetHostLRUSize:       getenvInt("WA_TARGET_HOST_LRU", 10_000),
 	}
+	cooldownSecs := getenvInt("WA_TARGET_HOST_COOLDOWN_SECS", 60)
+	if cooldownSecs < 1 {
+		cooldownSecs = 60
+	}
+	cfg.TargetHostCooldown = time.Duration(cooldownSecs) * time.Second
+
+	acqMS := getenvInt("WA_TARGET_HOST_ACQUIRE_TIMEOUT_MS", 0)
+	if acqMS <= 0 {
+		acqMS = cfg.MaxTimeoutMS + 2000
+		if acqMS > 120_000 {
+			acqMS = 120_000
+		}
+	}
+	cfg.TargetHostAcquireTimeout = time.Duration(acqMS) * time.Millisecond
+
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
 	}
@@ -96,6 +125,17 @@ func LoadConfig() (Config, error) {
 	}
 	if cfg.MaxBodyBytes < 1024 {
 		cfg.MaxBodyBytes = 1024
+	}
+	if cfg.TargetPerHostRPM > 0 {
+		if cfg.TargetPerHostBurst < 1 {
+			cfg.TargetPerHostBurst = 1
+		}
+		if cfg.TargetHostFailThreshold < 1 {
+			cfg.TargetHostFailThreshold = 1
+		}
+		if cfg.TargetHostLRUSize < 1 {
+			cfg.TargetHostLRUSize = 1
+		}
 	}
 	return cfg, nil
 }
