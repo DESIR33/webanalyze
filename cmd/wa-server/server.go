@@ -22,7 +22,11 @@ func buildHTTPHandler(cfg Config, db *sql.DB, wa *webanalyze.WebAnalyzer, pool *
 	if humCfg.OpenAPI.Info != nil {
 		humCfg.OpenAPI.Info.Description = `Sync web technology detection API.
 
-Authenticate with Authorization: Bearer wa_live_<secret> (see environment bootstrapping docs).`
+Authenticate with Authorization: Bearer wa_live_<secret> (see environment bootstrapping docs).
+
+## Retry semantics (idempotency)
+
+Write endpoints accept optional ` + "`Idempotency-Key`" + ` (1–255 ASCII). Retries with the same key and JSON body receive the cached status and body. If the original request is still running, the server responds with 409 ` + "`IDEMPOTENCY_IN_PROGRESS`" + ` and ` + "`Retry-After: 5`" + `; back off and retry. Reusing a key with a different body yields 422 ` + "`IDEMPOTENCY_KEY_CONFLICT`" + `. Server errors (5xx) are not cached. Recommended client policy: exponential backoff with jitter, respect ` + "`Retry-After`" + `, and use a stable key per logical operation (e.g. ULID).`
 	}
 	if humCfg.OpenAPI.Components != nil && humCfg.OpenAPI.Components.SecuritySchemes == nil {
 		humCfg.OpenAPI.Components.SecuritySchemes = map[string]*huma.SecurityScheme{}
@@ -46,12 +50,14 @@ Authenticate with Authorization: Bearer wa_live_<secret> (see environment bootst
 	registerHealth(api, st)
 	registerAnalyze(api, cfg, wa, pool)
 	registerBulkAnalyze(api, cfg, wa, pool)
+	registerOpenAPIIdempotency(api)
 
 	r := chi.NewRouter()
 	r.Use(requestIDMiddleware)
 	r.Use(peekAnalyzeHostMiddleware(256 * 1024))
 	r.Use(recoverMiddleware(log))
 	r.Use(authAndRateLimitMiddleware(v, rl, lf, log))
+	r.Use(idempotencyMiddleware(newIdempotencyStore(rl.rawClient()), cfg.MaxBodyBytes, log))
 	r.Use(quotaHeadersAndAccountingMiddleware(rl))
 	r.Use(loggingMiddleware(log))
 	r.Mount("/", inner)

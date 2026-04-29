@@ -14,25 +14,29 @@ import (
 
 // Error codes published in OpenAPI (stable strings).
 const (
-	CodeInvalidURL        = "INVALID_URL"
-	CodeDNSFail           = "DNS_FAIL"
-	CodeTLSFail           = "TLS_FAIL"
-	CodeTimeout           = "TIMEOUT"
-	CodeBlocked403        = "BLOCKED_403"
-	CodeBlockedCaptcha    = "BLOCKED_CAPTCHA"
-	CodeEmptyPage         = "EMPTY_PAGE"
-	CodeInternal          = "INTERNAL"
-	CodeUnauthorized      = "UNAUTHORIZED"
-	CodeRateLimited       = "RATE_LIMITED"
-	CodeTargetHostLimited = "TARGET_HOST_LIMITED"
-	CodeTargetHostCircuit = "TARGET_HOST_CIRCUIT_OPEN"
-	CodeBatchEmpty        = "BATCH_EMPTY"
-	CodeBatchTooLarge     = "BATCH_TOO_LARGE"
+	CodeInvalidURL             = "INVALID_URL"
+	CodeInvalidPayload         = "INVALID_PAYLOAD"
+	CodeDNSFail                = "DNS_FAIL"
+	CodeTLSFail                = "TLS_FAIL"
+	CodeTimeout                = "TIMEOUT"
+	CodeBlocked403             = "BLOCKED_403"
+	CodeBlockedCaptcha         = "BLOCKED_CAPTCHA"
+	CodeEmptyPage              = "EMPTY_PAGE"
+	CodeInternal               = "INTERNAL"
+	CodeUnauthorized           = "UNAUTHORIZED"
+	CodeRateLimited            = "RATE_LIMITED"
+	CodeTargetHostLimited      = "TARGET_HOST_LIMITED"
+	CodeTargetHostCircuit      = "TARGET_HOST_CIRCUIT_OPEN"
+	CodeBatchEmpty             = "BATCH_EMPTY"
+	CodeBatchTooLarge          = "BATCH_TOO_LARGE"
+	CodeInvalidIdempotencyKey  = "INVALID_IDEMPOTENCY_KEY"
+	CodeIdempotencyKeyConflict = "IDEMPOTENCY_KEY_CONFLICT"
+	CodeIdempotencyInProgress  = "IDEMPOTENCY_IN_PROGRESS"
 )
 
 // ErrorPayload is the typed error envelope (R5).
 type ErrorPayload struct {
-	Code      string `json:"code" doc:"Stable error code" enum:"INVALID_URL,DNS_FAIL,TLS_FAIL,TIMEOUT,BLOCKED_403,BLOCKED_CAPTCHA,EMPTY_PAGE,INTERNAL,UNAUTHORIZED,RATE_LIMITED,TARGET_HOST_LIMITED,TARGET_HOST_CIRCUIT_OPEN,BATCH_EMPTY,BATCH_TOO_LARGE"`
+	Code      string `json:"code" doc:"Stable error code" enum:"INVALID_URL,INVALID_PAYLOAD,DNS_FAIL,TLS_FAIL,TIMEOUT,BLOCKED_403,BLOCKED_CAPTCHA,EMPTY_PAGE,INTERNAL,UNAUTHORIZED,RATE_LIMITED,TARGET_HOST_LIMITED,TARGET_HOST_CIRCUIT_OPEN,BATCH_EMPTY,BATCH_TOO_LARGE,INVALID_IDEMPOTENCY_KEY,IDEMPOTENCY_KEY_CONFLICT,IDEMPOTENCY_IN_PROGRESS"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
 	RequestID string `json:"request_id"`

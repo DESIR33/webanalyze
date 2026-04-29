@@ -15,7 +15,7 @@ type redisLimiter struct {
 
 func newRedisLimiter(addr string) (*redisLimiter, error) {
 	if addr == "" {
-		return nil, nil
+		return &redisLimiter{client: nil}, nil
 	}
 	opt, err := redis.ParseURL(addr)
 	if err != nil {
@@ -34,6 +34,13 @@ func (rl *redisLimiter) Close() error {
 		return nil
 	}
 	return rl.client.Close()
+}
+
+func (rl *redisLimiter) rawClient() *redis.Client {
+	if rl == nil {
+		return nil
+	}
+	return rl.client
 }
 
 // CheckRPS token bucket refill at rate/sec, capacity burst; consume one token if available.

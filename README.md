@@ -58,6 +58,8 @@ See `cmd/webanalyze/main.go` for an example on how to use this as a library.
 
 The `wa-server` binary exposes versioned HTTP endpoints under `/v1`, OpenAPI 3.1 at `/v1/openapi.json`, Swagger UI at `/v1/docs`, sync analyze at `POST /v1/analyze`, `GET /v1/health`, and `GET /v1/ready`. Authenticate with `Authorization: Bearer <key_id>:<plaintext_secret>` on protected routes (everything except `/v1/health` and OpenAPI/docs/schema routes).
 
+**Idempotency:** `POST /v1/analyze` and `POST /v1/analyze/bulk` accept optional `Idempotency-Key` (1–255 ASCII, no whitespace). Retries with the same key and semantically identical JSON body return the cached status and body for 24 hours (see `X-Idempotency-*` response headers in OpenAPI). `409 IDEMPOTENCY_IN_PROGRESS` with `Retry-After: 5` means the first request is still running. Requires Redis (`WA_REDIS_URL`); if Redis is unavailable the server fails open (no idempotency).
+
 Build locally:
 
 ```bash
@@ -80,6 +82,7 @@ Configure via environment variables:
 | `WA_API_KEYS` | *(required)* | Comma-separated `id:secret` pairs seeded at startup (stored hashed with Argon2id) |
 | `WA_RATE_LIMIT_PER_MINUTE` | `0` | Optional per-key requests/minute (0 disables) |
 | `WA_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `WA_REDIS_URL` | *(empty)* | Redis for rate limits and idempotency; empty fails open for both |
 
 Example (`curl`):
 

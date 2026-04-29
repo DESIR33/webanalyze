@@ -73,7 +73,10 @@ func newTestHandler(t *testing.T, cfg Config, redisAddr string, insertKey bool, 
 		rl = r
 		t.Cleanup(func() { _ = rl.Close() })
 	} else {
-		rl, _ = newRedisLimiter("")
+		rl, err = newRedisLimiter("")
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	lf := startLastUsedFlusher(st)
