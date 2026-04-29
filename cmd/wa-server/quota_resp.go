@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -28,6 +29,9 @@ func quotaHeadersAndAccountingMiddleware(rl *redisLimiter) func(http.Handler) ht
 			}
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r)
+			if strings.EqualFold(ww.Header().Get("X-Idempotency-Replayed"), "true") {
+				return
+			}
 			st := ww.Status()
 			counted := (st >= 200 && st < 400) || (st >= 500 && st < 600)
 			if counted {

@@ -21,7 +21,7 @@ type Config struct {
 	TechFile           string
 	DBPath             string // SQLite file DSN fragment when WA_DATABASE_URL is empty
 	DatabaseURL        string // WA_DATABASE_URL (Postgres) takes precedence over SQLite
-	RedisURL           string // WA_REDIS_URL (empty = in-process rate limits fail-open)
+	RedisURL           string // WA_REDIS_URL (empty = rate limits + idempotency fail-open)
 	BootstrapAPIKey    string // WA_BOOTSTRAP_API_KEY wa_live_... first boot only
 	BootstrapOwner     string // WA_BOOTSTRAP_OWNER
 	BootstrapKeyName   string // WA_BOOTSTRAP_KEY_NAME

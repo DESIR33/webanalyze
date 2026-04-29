@@ -27,4 +27,24 @@ var (
 			Buckets: prometheus.ExponentialBuckets(0.0001, 2, 16),
 		},
 	)
+	waIdempotencyRequests = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "wa_idempotency_requests_total",
+			Help: "Idempotency middleware outcomes when Idempotency-Key is present",
+		},
+		[]string{"outcome"},
+	)
+	waIdempotencyReplaySavingsSeconds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "wa_idempotency_replay_savings_seconds",
+			Help:    "Approximate compute seconds saved by serving a cached idempotent response",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 18),
+		},
+	)
+	waIdempotencyLockExpired = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "wa_idempotency_lock_expired_total",
+			Help: "Times a completing idempotent request found no Redis entry (lock TTL or race)",
+		},
+	)
 )
